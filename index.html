@@ -158,14 +158,33 @@ function boot(B) {
   document.head.appendChild(st);
 
   document.body.innerHTML = B.body;
+  /* Marks the read-only snapshot for app.css: hides the AI cards (no server to
+     ask), Demo mode, CSV export and the "click any cell to edit" hints. Set
+     before the modules run, so the section nav never lists the hidden cards. */
+  document.body.classList.add("is-snapshot");
   document.body.insertBefore(snapBar(S), document.body.firstChild);
 
   var url = function (src) { return URL.createObjectURL(new Blob([src], { type: "text/javascript" })); };
-  var charts = url(B.modules.charts), proj = url(B.modules.projection);
-  var app = B.modules.app
-    .replace('from "./charts.js"', 'from "' + charts + '"')
-    .replace('from "./projection.js"', 'from "' + proj + '"');
-  import(url(app)).then(function () {
+  /* Every module arrives as source. Imports between them are `from "./x.js"`
+     (the publish script refuses anything else), which a blob URL can't resolve,
+     so each is rewritten to its sibling's blob URL. Dependencies are resolved
+     depth-first so a module is only turned into a blob once the modules it
+     imports already have theirs. */
+  var mods = B.modules, blobs = {};
+  function blobFor(name, seen) {
+    if (blobs[name]) return blobs[name];
+    seen = seen || {};
+    if (seen[name]) throw new Error("import cycle at " + name + ".js");
+    seen[name] = true;
+    var src = mods[name].replace(/from\s+"\.\/([A-Za-z0-9_-]+)\.js"/g, function (m, dep) {
+      if (!mods[dep]) throw new Error(name + ".js imports missing " + dep + ".js");
+      return 'from "' + blobFor(dep, seen) + '"';
+    });
+    return (blobs[name] = url(src));
+  }
+  var appUrl;
+  try { appUrl = blobFor("app"); } catch (e) { say("The dashboard failed to start: " + e.message, true); return; }
+  import(appUrl).then(function () {
     var lk = $("lk"); if (lk) lk.remove();
   }, function (e) {
     say("The dashboard failed to start: " + e.message, true);
