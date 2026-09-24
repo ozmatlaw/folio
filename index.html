@@ -248,6 +248,10 @@ function installShim(B) {
     return "Closed";
   }
 
+  function nyDate(ms) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date(ms));
+  }
+
   function snapQuote(sym) {
     var q = S.quotes[sym];
     if (!q) return missing(sym);
@@ -268,9 +272,19 @@ function installShim(B) {
         var base = S.quotes[sym] || { symbol: sym, name: sym, currency: "USD", assetClass: "stocks" };
         var q = {}; for (var k in base) q[k] = base[k];
         q.ok = true; q.price = r.c; q.change = r.d; q.changePct = r.dp; q.prevClose = r.pc;
+        /* Before the open, the free tier's "current" price is YESTERDAY's close
+           and its change is yesterday's move — it has no pre-market data. Left
+           alone, the phone would print yesterday's move under "Today" and value
+           the portfolio at yesterday's close while the Mac (Nasdaq, which does
+           carry pre-market trades) shows this morning's prices. Until the first
+           regular trade of the day, today's move is honestly nothing. */
+        var status = nyStatus();
+        if (status === "Pre-Market" && r.t && nyDate(r.t * 1000) < nyDate(Date.now())) {
+          q.prevClose = r.c; q.change = 0; q.changePct = 0;
+        }
         q.asOf = r.t ? new Date(r.t * 1000).toLocaleString("en-US", { timeZone: "America/New_York",
           month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) + " ET" : q.asOf;
-        q.marketStatus = nyStatus();
+        q.marketStatus = status === "Pre-Market" ? "Pre-Market · last close" : status;
         q.realTime = true;
         q.extendedPrice = null;
         qcache[sym] = { t: Date.now(), q: q };
