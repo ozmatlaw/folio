@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Portfolio">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#101010">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Portfolio</title>
+<!--
+  THE PUBLIC HALF OF THE PHONE SNAPSHOT. Everything that says anything about the
+  portfolio — every holding, balance, and the dashboard's own code — is inside
+  data.bin, encrypted with AES-256-GCM under a key derived from the passphrase
+  (PBKDF2-HMAC-SHA256). This page holds no data and no key: it asks for the
+  passphrase, decrypts, and hands the result to the unchanged dashboard.
+
+  The dashboard was written against a local server, so it is given one: a fetch()
+  shim that answers /api/* from the snapshot, fetches prices live from Finnhub and
+  the shekel rate live from frankfurter, and turns every write into a refusal.
+  Built by tools/publish_snapshot.py; do not edit the copy in the site repo.
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body { background: #101010; }
+  .lk { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px;
+        background: #101010; color: #fff; z-index: 9999;
+        font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  .lk form { width: min(340px, 100%); display: grid; gap: 12px; }
+  .lk h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  .lk p { margin: 0; color: #c3c2b7; font-size: 14px; }
+  .lk input[type=password] { font: inherit; font-size: 17px; padding: 13px; border-radius: 10px;
+        border: 1px solid #3a3a37; background: #1a1a18; color: #fff; direction: ltr; }
+  .lk button { font: inherit; font-weight: 600; padding: 13px; border: 0; border-radius: 10px;
+        background: #fff; color: #000; }
+  .lk button[disabled] { opacity: .5; }
+  .lk label { display: flex; gap: 8px; align-items: center; color: #c3c2b7; font-size: 14px; }
+  .lk .msg { min-height: 1.4em; font-size: 14px; color: #c3c2b7; }
+  .lk .msg.bad { color: #e66767; }
+  .snap-bar { font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #c3c2b7; background: #1a1a18; border-bottom: 1px solid #2c2c29;
+        padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .snap-bar b { color: #fff; font-weight: 600; }
+  .snap-bar .old { color: #fab219; font-weight: 600; }
+  .snap-bar button { margin-left: auto; font: inherit; color: #c3c2b7; background: none;
+        border: 1px solid #3a3a37; border-radius: 6px; padding: 1px 8px; }
+</style>
+</head>
+<body>
+<div class="lk" id="lk">
+  <form id="lkf" autocomplete="off">
+    <h1>Portfolio</h1>
+    <p>Encrypted snapshot. Enter the passphrase.</p>
+    <input id="lkpw" type="password" autocapitalize="none" autocorrect="off"
+           spellcheck="false" enterkeyhint="go" placeholder="Passphrase" aria-label="Passphrase">
+    <button id="lkgo" type="submit">Open</button>
+    <label><input type="checkbox" id="lkrem" checked> Remember on this device</label>
+    <div class="msg" id="lkmsg" aria-live="polite"></div>
+  </form>
+</div>
+<script>
+(function () {
+"use strict";
+var SALT = "cr3OLO6Y17gzvjMX9RxgrQ==", ITER = 600000;
+var KEY_STORE = "folio.key";
+var $ = function (id) { return document.getElementById(id); };
+var msg = $("lkmsg");
+function say(t, bad) { msg.textContent = t; msg.className = "msg" + (bad ? " bad" : ""); }
+function b64(s) { return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); }); }
+function unb64(u8) { var s = ""; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); }
+
+if (!(window.crypto && crypto.subtle) || typeof DecompressionStream === "undefined") {
+  say("This browser can't decrypt the snapshot. Open it in Safari or Chrome over https.", true);
+  $("lkgo").disabled = true;
+  return;
+}
+
+var cipher = null;
+/* Fetched once, in parallel with typing. no-cache revalidates against GitHub's
+   ETag, so a republished snapshot is picked up on the next open rather than
+   whenever Pages' ten-minute cache happens to expire. */
+var cipherP = fetch("data.bin", { cache: "no-cache" }).then(function (r) {
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.arrayBuffer();
+}).then(function (b) { cipher = new Uint8Array(b); return cipher; });
+
+function deriveKey(pw) {
+  return crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"])
+    .then(function (base) {
+      return crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: b64(SALT), iterations: ITER }, base, 256);
+    }).then(function (bits) { return new Uint8Array(bits); });
+}
+
+function open(raw) {
+  return cipherP.then(function (c) {
+    return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]).then(function (k) {
+      return crypto.subtle.decrypt({ name: "AES-GCM", iv: c.slice(0, 12) }, k, c.slice(12));
+    });
+  }).then(function (plain) {
+    var s = new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Response(s).text();
+  }).then(JSON.parse);
+}
+
+var stored = null;
+try { stored = localStorage.getItem(KEY_STORE); } catch (e) {}
+if (stored) {
+  say("Opening…");
+  open(b64(stored)).then(boot, function () {
+    /* The passphrase changed since this device remembered it — or the file
+       failed to load. Either way the stored key is no use; ask again. */
+    try { localStorage.removeItem(KEY_STORE); } catch (e) {}
+    cipherP.then(function () { say(""); }, function (e) { say("Couldn't load the snapshot: " + e.message, true); });
+  });
+}
+
+$("lkf").addEventListener("submit", function (ev) {
+  ev.preventDefault();
+  var pw = $("lkpw").value.trim().toLowerCase();
+  if (!pw) return;
+  $("lkgo").disabled = true;
+  say("Unlocking…");
+  var raw;
+  deriveKey(pw).then(function (k) { raw = k; return open(k); }).then(function (bundle) {
+    if ($("lkrem").checked) { try { localStorage.setItem(KEY_STORE, unb64(raw)); } catch (e) {} }
+    boot(bundle);
+  }, function (e) {
+    $("lkgo").disabled = false;
+    /* AES-GCM fails its tag check on a wrong key, which surfaces as an
+       OperationError. Anything else is the network. */
+    say(e && e.name === "OperationError" ? "Wrong passphrase." : "Couldn't open: " + (e && e.message), true);
+  });
+});
+
+function lock() {
+  try { localStorage.removeItem(KEY_STORE); } catch (e) {}
+  location.reload();
+}
+
+/* ============================ the dashboard ============================ */
+
+function boot(B) {
+  var S = B.snap;
+  installShim(B);
+
+  var st = document.createElement("style");
+  st.textContent = B.css
+    /* Read-only. The selector is the app's own list of every control that adds,
+       imports, deletes or sells — lifted from app.js at publish time — so this
+       stays in step with it. Buttons go; inputs stay visible (they are how most
+       figures are displayed) but stop taking taps. */
+    + "\n" + B.readonly.hide + "{display:none!important}"
+    + "\n" + B.readonly.inert + "{pointer-events:none!important;border-color:transparent!important;background:transparent!important}";
+  document.head.appendChild(st);
+
+  document.body.innerHTML = B.body;
+  document.body.insertBefore(snapBar(S), document.body.firstChild);
+
+  var url = function (src) { return URL.createObjectURL(new Blob([src], { type: "text/javascript" })); };
+  var charts = url(B.modules.charts), proj = url(B.modules.projection);
+  var app = B.modules.app
+    .replace('from "./charts.js"', 'from "' + charts + '"')
+    .replace('from "./projection.js"', 'from "' + proj + '"');
+  import(url(app)).then(function () {
+    var lk = $("lk"); if (lk) lk.remove();
+  }, function (e) {
+    say("The dashboard failed to start: " + e.message, true);
+  });
+}
+
+function snapBar(S) {
+  var built = new Date(S.builtAt);
+  var days = Math.floor((Date.now() - built.getTime()) / 86400000);
+  var when = built.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  var bar = document.createElement("div");
+  bar.className = "snap-bar";
+  /* The age is the caveat that matters: holdings are only as current as the
+     last publish, and a live price times a stale share count is still stale. */
+  bar.innerHTML = "<span>Holdings as of <b>" + when + "</b>"
+    + (days >= 3 ? ' · <span class="old">' + days + " days old</span>" : "") + "</span>"
+    + "<span>" + (S.liveQuotes ? "Prices <b>live</b> (Finnhub)" : "Prices from the snapshot") + "</span>"
+    + "<span>Read-only</span>";
+  var b = document.createElement("button");
+  b.type = "button"; b.textContent = "Lock"; b.onclick = lock;
+  bar.appendChild(b);
+  return bar;
+}
+
+function installShim(B) {
+  var S = B.snap, realFetch = window.fetch.bind(window);
+  var RANGE_DAYS = S.rangeDays, GROWTH_ORDER = S.growthOrder;
+
+  function json(o, status) {
+    return Promise.resolve(new Response(JSON.stringify(o), {
+      status: status || 200, headers: { "Content-Type": "application/json" } }));
+  }
+  function symsOf(u) {
+    return (u.searchParams.get("symbols") || "").toUpperCase().split(/[,\s]+/).filter(Boolean);
+  }
+  function missing(sym, extra) {
+    var o = { symbol: sym, ok: false, unavailable: true, error: "Not in the snapshot", reason: "Not in the snapshot" };
+    for (var k in extra || {}) o[k] = extra[k];
+    return o;
+  }
+  function isoDaysAgo(n) {
+    var d = new Date(Date.now() - n * 86400000);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  /* ---- live prices ---- */
+  var qcache = {};                                   // sym -> { t, q }
+  var QUOTE_TTL = 55000;
+
+  function nyStatus() {
+    var p = {};
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short",
+      hour: "numeric", minute: "numeric", hour12: false }).formatToParts(new Date())
+      .forEach(function (x) { p[x.type] = x.value; });
+    if (p.weekday === "Sat" || p.weekday === "Sun") return "Closed";
+    var m = (Number(p.hour) % 24) * 60 + Number(p.minute);
+    if (m < 240) return "Closed";
+    if (m < 570) return "Pre-Market";
+    if (m < 960) return "Open";
+    if (m < 1200) return "After-Hours";
+    return "Closed";
+  }
+
+  function snapQuote(sym) {
+    var q = S.quotes[sym];
+    if (!q) return missing(sym);
+    var o = {}; for (var k in q) o[k] = q[k];
+    o.realTime = false;
+    o.marketStatus = "Snapshot";
+    return o;
+  }
+
+  function finnhub(sym) {
+    return realFetch("https://finnhub.io/api/v1/quote?symbol=" + encodeURIComponent(sym)
+      + "&token=" + encodeURIComponent(B.finnhubKey), { cache: "no-store", referrerPolicy: "no-referrer" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (r) {
+        /* Finnhub answers an unknown symbol with zeros rather than an error, so
+           a zero price is "don't know", never "worth nothing". */
+        if (!r || !(r.c > 0)) throw new Error("no price");
+        var base = S.quotes[sym] || { symbol: sym, name: sym, currency: "USD", assetClass: "stocks" };
+        var q = {}; for (var k in base) q[k] = base[k];
+        q.ok = true; q.price = r.c; q.change = r.d; q.changePct = r.dp; q.prevClose = r.pc;
+        q.asOf = r.t ? new Date(r.t * 1000).toLocaleString("en-US", { timeZone: "America/New_York",
+          month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) + " ET" : q.asOf;
+        q.marketStatus = nyStatus();
+        q.realTime = true;
+        q.extendedPrice = null;
+        qcache[sym] = { t: Date.now(), q: q };
+        return q;
+      });
+  }
+
+  function liveQuotes(syms) {
+    if (!B.finnhubKey) return Promise.resolve(syms.map(snapQuote));
+    var now = Date.now();
+    var need = syms.filter(function (s) { return !(qcache[s] && now - qcache[s].t < QUOTE_TTL); });
+    /* Six at a time: the free tier allows 60 a minute and the app refreshes
+       every 60s, so a portfolio of ~20 tickers sits well inside it. */
+    var i = 0;
+    function worker() {
+      if (i >= need.length) return Promise.resolve();
+      var s = need[i++];
+      return finnhub(s).catch(function () {}).then(worker);
+    }
+    var ws = []; for (var n = 0; n < 6; n++) ws.push(worker());
+    return Promise.all(ws).then(function () {
+      return syms.map(function (s) { return qcache[s] ? qcache[s].q : snapQuote(s); });
+    });
+  }
+
+  function liveFx() {
+    return realFetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=ILS", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var rate = d && d.rates && d.rates.ILS;
+        if (!(rate > 0)) throw new Error("no rate");
+        return { ok: true, pair: "USDILS", rate: rate, asOf: d.date, source: "frankfurter" };
+      })
+      .catch(function () { return S.fx; });
+  }
+
+  /* ---- the routes ---- */
+  function route(u, method) {
+    var p = u.pathname;
+    if (method !== "GET") {
+      /* Projection inputs are reading preferences the app already treats as
+         best-effort saves; accepting them keeps the goal and horizon controls
+         usable for the session without pretending anything was stored. */
+      if (p === "/api/plan") return json({ ok: true });
+      return json({ ok: false, error: "This is a read-only snapshot. Make changes on the Mac, then republish." }, 403);
+    }
+    if (p === "/api/state") { var o = { ok: true }; for (var k in S.state) o[k] = S.state[k]; return json(o); }
+    if (p === "/api/splits") return json(S.splits);
+    if (p === "/api/fx") return liveFx().then(function (d) { return json(d); });
+    if (p === "/api/fxhistory") {
+      return json(S.fxhist[u.searchParams.get("range") || "1y"] || S.fxhist["1y"] || { ok: false, error: "Not in the snapshot" });
+    }
+    if (p === "/api/quotes") return liveQuotes(symsOf(u)).then(function (q) { return json({ ok: true, quotes: q }); });
+    if (p === "/api/history") {
+      var rng = u.searchParams.get("range") || "1y";
+      var cut = isoDaysAgo(RANGE_DAYS[rng] || 366);
+      return json({ ok: true, range: rng, series: symsOf(u).map(function (s) {
+        var h = S.hist[s];
+        if (!h || !h.ok) return missing(s, { range: rng });
+        return { symbol: s, ok: true, range: rng, points: h.points.filter(function (x) { return x.date >= cut; }) };
+      }) });
+    }
+    if (p === "/api/growth") {
+      var gr = u.searchParams.get("range") || "5y", stats = {}, wins = {};
+      symsOf(u).forEach(function (s) {
+        var w = S.windows[s] || {};
+        wins[s] = w;
+        stats[s] = w[gr] || GROWTH_ORDER.map(function (k) { return w[k]; }).filter(Boolean)[0] || null;
+      });
+      return json({ ok: true, range: gr, stats: stats, windows: wins, available: GROWTH_ORDER });
+    }
+    if (p === "/api/dividendinfo") return json({ ok: true, dividends: symsOf(u).map(function (s) { return S.divs[s] || missing(s); }) });
+    if (p === "/api/ratings") return json({ ok: true, ratings: symsOf(u).map(function (s) { return S.ratings[s] || missing(s); }) });
+    if (p === "/api/ai") return json({ ok: true, enabled: false, model: null,
+      hint: "Asking isn't available in the phone snapshot. Use it on the Mac." });
+    return json({ ok: false, error: "Not available in the snapshot" }, 404);
+  }
+
+  window.fetch = function (input, init) {
+    var raw = typeof input === "string" ? input : (input && input.url) || "";
+    var u;
+    try { u = new URL(raw, location.origin); } catch (e) { return realFetch(input, init); }
+    /* Only the app's own relative /api/* calls — never the absolute Finnhub or
+       frankfurter URLs this shim itself makes. */
+    if (u.origin === location.origin && u.pathname.indexOf("/api/") === 0) {
+      var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+      return route(u, method);
+    }
+    return realFetch(input, init);
+  };
+}
+})();
+</script>
+</body>
+</html>
