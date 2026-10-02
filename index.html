@@ -310,39 +310,6 @@ function installShim(B) {
     });
   }
 
-  /* CNN's Fear & Greed feed allows a page to read it, so the phone gets today's
-     reading rather than the publish-time one; the snapshot's copy is the
-     fallback. Reshaped to exactly what /api/feargreed returns on the Mac. */
-  var FG_PARTS = [
-    ["market_momentum_sp500", "Market momentum", "S&P 500 vs its 125-day average"],
-    ["stock_price_strength", "Stock price strength", "52-week highs vs lows on the NYSE"],
-    ["stock_price_breadth", "Stock price breadth", "Volume in rising vs falling stocks"],
-    ["put_call_options", "Put and call options", "5-day put/call ratio"],
-    ["market_volatility_vix", "Market volatility", "VIX vs its 50-day average"],
-    ["junk_bond_demand", "Junk bond demand", "Junk vs investment-grade yield spread"],
-    ["safe_haven_demand", "Safe haven demand", "Stocks vs bonds, last 20 days"]];
-  function liveFearGreed() {
-    var r1 = function (v) { return typeof v === "number" ? Math.round(v * 10) / 10 : null; };
-    return realFetch("https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
-      { cache: "no-store", referrerPolicy: "no-referrer" })
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (d) {
-        var fg = d && d.fear_and_greed;
-        if (!fg || typeof fg.score !== "number") throw new Error("no score");
-        return {
-          ok: true, source: "CNN Business Fear & Greed Index",
-          score: r1(fg.score), rating: fg.rating, asOf: fg.timestamp,
-          previousClose: r1(fg.previous_close), weekAgo: r1(fg.previous_1_week),
-          monthAgo: r1(fg.previous_1_month), yearAgo: r1(fg.previous_1_year),
-          parts: FG_PARTS.map(function (x) {
-            var c = d[x[0]] || {};
-            return { key: x[0], label: x[1], what: x[2], score: r1(c.score), rating: c.rating };
-          }),
-        };
-      })
-      .catch(function () { return S.feargreed || { ok: false, error: "Not in the snapshot" }; });
-  }
-
   function liveFx() {
     return realFetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=ILS", { cache: "no-store" })
       .then(function (r) { return r.json(); })
@@ -391,7 +358,6 @@ function installShim(B) {
     }
     if (p === "/api/dividendinfo") return json({ ok: true, dividends: symsOf(u).map(function (s) { return S.divs[s] || missing(s); }) });
     if (p === "/api/ratings") return json({ ok: true, ratings: symsOf(u).map(function (s) { return S.ratings[s] || missing(s); }) });
-    if (p === "/api/feargreed") return liveFearGreed().then(function (d) { return json(d); });
     if (p === "/api/ai") return json({ ok: true, enabled: false, model: null,
       hint: "Asking isn't available in the phone snapshot. Use it on the Mac." });
     return json({ ok: false, error: "Not available in the snapshot" }, 404);
