@@ -392,6 +392,8 @@ function installShim(B) {
     if (p === "/api/dividendinfo") return json({ ok: true, dividends: symsOf(u).map(function (s) { return S.divs[s] || missing(s); }) });
     if (p === "/api/ratings") return json({ ok: true, ratings: symsOf(u).map(function (s) { return S.ratings[s] || missing(s); }) });
     if (p === "/api/feargreed") return liveFearGreed().then(function (d) { return json(d); });
+    // Published fund-track returns, frozen at publish time (they change monthly).
+    if (p === "/api/fundreturns") return json(S.fundreturns || { ok: false, error: "Not in the snapshot" });
     if (p === "/api/ai") return json({ ok: true, enabled: false, model: null,
       hint: "Asking isn't available in the phone snapshot. Use it on the Mac." });
     return json({ ok: false, error: "Not available in the snapshot" }, 404);
