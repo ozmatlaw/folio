@@ -343,15 +343,32 @@ function installShim(B) {
       .catch(function () { return S.feargreed || { ok: false, error: "Not in the snapshot" }; });
   }
 
+  /* The rate, as fresh as a page can get it. No live market source allows a
+     request from a web page (Yahoo refuses them; Finnhub's free plan has no
+     currencies), so the phone takes the NEWER of the two daily rates — the
+     ECB's (~16:00 CET on business days) and open.er-api's (~00:00 UTC daily) —
+     and falls back to the rate frozen into the snapshot. The Mac reads the
+     live market rate. */
   function liveFx() {
-    return realFetch("https://api.frankfurter.dev/v1/latest?base=USD&symbols=ILS", { cache: "no-store" })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var rate = d && d.rates && d.rates.ILS;
-        if (!(rate > 0)) throw new Error("no rate");
-        return { ok: true, pair: "USDILS", rate: rate, asOf: d.date, source: "frankfurter" };
-      })
-      .catch(function () { return S.fx; });
+    var get = function (url, pick) {
+      return realFetch(url, { cache: "no-store" }).then(function (r) { return r.json(); })
+        .then(pick).catch(function () { return null; });
+    };
+    return Promise.all([
+      get("https://api.frankfurter.dev/v1/latest?base=USD&symbols=ILS", function (d) {
+        var r = d && d.rates && d.rates.ILS;
+        return r > 0 ? { rate: r, asOf: d.date + "T14:15:00+00:00", source: "frankfurter" } : null;
+      }),
+      get("https://open.er-api.com/v6/latest/USD", function (d) {
+        var r = d && d.rates && d.rates.ILS;
+        return r > 0 && d.time_last_update_unix
+          ? { rate: r, asOf: new Date(d.time_last_update_unix * 1000).toISOString(), source: "open.er-api" } : null;
+      }),
+    ]).then(function (xs) {
+      var c = xs.filter(Boolean).sort(function (a, b) { return a.asOf < b.asOf ? 1 : -1; })[0];
+      if (!c) return S.fx;
+      return { ok: true, pair: "USDILS", rate: c.rate, asOf: c.asOf, source: c.source, live: false };
+    });
   }
 
   /* ---- the routes ---- */
